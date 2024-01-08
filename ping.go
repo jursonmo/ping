@@ -49,7 +49,6 @@
 // it calls the OnFinish callback.
 //
 // For a full ping example, see "cmd/ping/ping.go".
-//
 package ping
 
 import (
@@ -60,12 +59,14 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/vishvananda/netns"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -205,6 +206,8 @@ type Pinger struct {
 	logger Logger
 
 	TTL int
+
+	NetNs string //net namespace
 }
 
 type packet struct {
@@ -413,7 +416,9 @@ func (p *Pinger) Run() error {
 	if err != nil {
 		return err
 	}
-	if conn, err = p.listen(); err != nil {
+	//edit by mo: use "p.listenWithNetNs(p.NetNs)" instead of "p.listen()"
+	//if conn, err = p.listen(); err != nil {
+	if conn, err = p.listenWithNetNs(p.NetNs); err != nil {
 		return err
 	}
 	defer conn.Close()
@@ -766,6 +771,33 @@ func (p *Pinger) sendICMP(conn packetConn) error {
 	}
 
 	return nil
+}
+
+// add by mo
+func (p *Pinger) listenWithNetNs(ns string) (packetConn, error) {
+	if ns != "" {
+		//net namespace 不为空, 自动设置SetPrivileged?
+		//p.SetPrivileged(true)
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		origin, err := netns.Get()
+		if err != nil {
+			return nil, err
+		}
+		defer origin.Close()
+		defer netns.Set(origin)
+
+		newns, err := netns.GetFromName(ns)
+		if err != nil {
+			return nil, err
+		}
+		err = netns.Set(newns)
+		if err != nil {
+			return nil, err
+		}
+		defer newns.Close()
+	}
+	return p.listen()
 }
 
 func (p *Pinger) listen() (packetConn, error) {
